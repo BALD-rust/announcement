@@ -2,15 +2,15 @@
 #![no_std]
 
 extern crate alloc;
-
 #[cfg(test)]
 extern crate std;
 
-use core::cell::Cell;
 use core::future::Future;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::{Context, Poll};
+
+use atomic::Atomic;
 
 use crate::wake_list::{WakeHandle, WakeList};
 
@@ -21,16 +21,16 @@ mod wake_list;
 /// Writing is instant, receiving will always wait for a value from the future.
 /// It is not guaranteed a waiting future will receive all messages - if a (second) new message is
 /// written before a waiting future is polled, it will miss the first message.
-pub struct Announcement<T> {
-    message: Cell<Option<T>>,
+pub struct Announcement<T: Copy> {
+    message: Atomic<Option<T>>,
     wake_list: WakeList,
     gen: AtomicU32,
 }
 
-impl<T> Announcement<T> {
+impl<T: Copy> Announcement<T> {
     pub const fn new() -> Announcement<T> {
         Announcement {
-            message: Cell::new(None),
+            message: Atomic::new(None),
             wake_list: WakeList::new(),
             gen: AtomicU32::new(u32::MIN),
         }
@@ -38,7 +38,7 @@ impl<T> Announcement<T> {
 
     pub fn announce(&self, message: T) {
         self.gen.fetch_add(1, Ordering::Relaxed);
-        self.message.set(Some(message));
+        self.message.store(Some(message), Ordering::Relaxed);
         self.wake_list.wake_all();
     }
 }
@@ -56,7 +56,7 @@ impl<T: Copy> Announcement<T> {
     }
 }
 
-struct AnnouncementFut<'a, T> {
+struct AnnouncementFut<'a, T: Copy> {
     ann: &'a Announcement<T>,
     wh: Option<WakeHandle>,
     my_gen: u32,
@@ -74,7 +74,7 @@ impl<T: Copy> Future for AnnouncementFut<'_, T> {
             Poll::Pending
         } else {
             if self.my_gen <= self.ann.gen.load(Ordering::Relaxed) {
-                if let Some(message) = self.ann.message.get() {
+                if let Some(message) = self.ann.message.load(Ordering::Relaxed) {
                     return Poll::Ready(message);
                 }
             }
@@ -87,6 +87,7 @@ impl<T: Copy> Future for AnnouncementFut<'_, T> {
 #[cfg(test)]
 mod test {
     use core::future::join;
+
     use super::*;
 
     #[tokio::test]
