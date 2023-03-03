@@ -1,6 +1,10 @@
+#![feature(future_join)]
 #![no_std]
 
 extern crate alloc;
+
+#[cfg(test)]
+extern crate std;
 
 use core::cell::Cell;
 use core::future::Future;
@@ -17,7 +21,7 @@ mod wake_list;
 /// Writing is instant, receiving will always wait for a value from the future.
 /// It is not guaranteed a waiting future will receive all messages - if a (second) new message is
 /// written before a waiting future is polled, it will miss the first message.
-struct Announcement<T> {
+pub struct Announcement<T> {
     message: Cell<Option<T>>,
     wake_list: WakeList,
     gen: AtomicU32,
@@ -40,6 +44,7 @@ impl<T> Announcement<T> {
 }
 
 impl<T: Copy> Announcement<T> {
+    /// Wait for a new message to arrive on the [Announcement] channel.
     pub async fn recv(&self) -> T {
         let fut = AnnouncementFut {
             ann: self,
@@ -76,5 +81,24 @@ impl<T: Copy> Future for AnnouncementFut<'_, T> {
 
             Poll::Pending
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use core::future::join;
+    use super::*;
+
+    #[tokio::test]
+    async fn test() {
+        let acc = Announcement::new();
+
+        let f1 = acc.recv();
+        let f2 = acc.recv();
+        let f3 = async {
+            acc.announce(123);
+        };
+
+        assert_eq!((123, 123, ()), join!(f1, f2, f3).await);
     }
 }
